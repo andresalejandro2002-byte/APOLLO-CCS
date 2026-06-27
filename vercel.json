@@ -1,0 +1,186 @@
+-- ═══════════════════════════════════════════════════════════════
+-- APO.YA — Schema de Supabase
+-- Ejecuta este SQL en: Supabase → SQL Editor → New Query
+-- ═══════════════════════════════════════════════════════════════
+
+-- ── Tabla de centros de refugio ─────────────────────────────────
+CREATE TABLE IF NOT EXISTS centers (
+  id                BIGSERIAL PRIMARY KEY,
+  nombre            TEXT NOT NULL,
+  direccion         TEXT,
+  telefono          TEXT,
+  estado            TEXT,
+  municipio         TEXT,
+  horario           TEXT,
+  foto_url          TEXT,
+  maps_url          TEXT,
+  insumos_requeridos TEXT[],
+  inventario        JSONB DEFAULT '{}',
+  status            TEXT DEFAULT 'critico' CHECK (status IN ('critico', 'moderado', 'full')),
+  ultimo_reporte    TIMESTAMPTZ,
+  ultimo_mensaje    TEXT,
+  verificado        BOOLEAN DEFAULT FALSE,
+  creado_en         TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ── Tabla de mensajes de Telegram ───────────────────────────────
+CREATE TABLE IF NOT EXISTS mensajes_telegram (
+  id                  BIGSERIAL PRIMARY KEY,
+  telegram_message_id BIGINT,
+  from_name           TEXT,
+  text                TEXT,
+  has_photo           BOOLEAN DEFAULT FALSE,
+  tipo                TEXT CHECK (tipo IN ('NECESIDAD', 'DONACION', 'IRRELEVANTE')),
+  centro_mencionado   TEXT,
+  insumos             TEXT[],
+  cantidades          JSONB DEFAULT '{}',
+  confianza           TEXT CHECK (confianza IN ('alta', 'media', 'baja')),
+  timestamp           TIMESTAMPTZ,
+  raw                 TEXT,
+  procesado_en        TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ── Índices ──────────────────────────────────────────────────────
+CREATE INDEX IF NOT EXISTS idx_centers_status ON centers(status);
+CREATE INDEX IF NOT EXISTS idx_centers_estado ON centers(estado);
+CREATE INDEX IF NOT EXISTS idx_mensajes_tipo ON mensajes_telegram(tipo);
+CREATE INDEX IF NOT EXISTS idx_mensajes_centro ON mensajes_telegram(centro_mencionado);
+CREATE INDEX IF NOT EXISTS idx_mensajes_timestamp ON mensajes_telegram(timestamp DESC);
+
+-- ── Row Level Security (RLS) — lectura pública, escritura solo API ──
+ALTER TABLE centers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mensajes_telegram ENABLE ROW LEVEL SECURITY;
+
+-- Cualquiera puede leer centros (el dashboard es público)
+CREATE POLICY "centros_lectura_publica"
+  ON centers FOR SELECT USING (true);
+
+-- Solo service_role puede escribir (el webhook de Vercel usa service_role)
+CREATE POLICY "centros_escritura_service"
+  ON centers FOR ALL USING (auth.role() = 'service_role');
+
+CREATE POLICY "mensajes_lectura_publica"
+  ON mensajes_telegram FOR SELECT USING (true);
+
+CREATE POLICY "mensajes_escritura_service"
+  ON mensajes_telegram FOR ALL USING (auth.role() = 'service_role');
+
+-- ═══════════════════════════════════════════════════════════════
+-- SEED: Centros reales extraídos de apoyo-venezuela.com
+-- ═══════════════════════════════════════════════════════════════
+
+INSERT INTO centers (nombre, direccion, telefono, estado, municipio, horario, maps_url, insumos_requeridos, status, verificado) VALUES
+
+('NOMAD / NESEB BOX',
+ 'Calle Elice, Taller Nomad, Chacao, Caracas',
+ NULL,
+ 'Distrito Capital', 'Chacao',
+ 'Desde 2026-06-26',
+ 'https://maps.app.goo.gl/hgSH4fT9rDWbjbfg6',
+ ARRAY['agua potable','insumos médicos','medicamentos básicos','alimentos no perecederos','herramientas de rescate'],
+ 'critico', false),
+
+('Canchas Las Guacamayas — Acad. Atlético de Madrid Venezuela',
+ 'CD Fray Luis de Leon, calle la cinta, Las Mercedes, Caracas',
+ '04142382104',
+ 'Distrito Capital', 'Baruta',
+ 'De 10:00 AM a 6:00 PM',
+ 'https://maps.app.goo.gl/zx3PoVGZaHELLHyv7',
+ ARRAY[]::TEXT[],
+ 'critico', false),
+
+('Suministros MVG',
+ 'Edificio El Quijote, Av. 100 Bolívar, Naguanagua',
+ '0424-2573973',
+ 'Carabobo', 'Naguanagua',
+ 'Lunes a sábado 8am a 5pm (hasta 2026-06-30)',
+ 'https://share.google/FsZkSi7GavaDQNNvH',
+ ARRAY['herramientas de rescate','insumos médicos','medicamentos básicos','alimentos no perecederos'],
+ 'moderado', true),
+
+('Club Los Castores',
+ 'San Antonio de los Altos, Urb. Los Castores',
+ '04142334528',
+ 'Miranda', 'Los Salias',
+ NULL,
+ 'https://maps.app.goo.gl/ncjkJ3B7TAnN1m1c8',
+ ARRAY['insumos médicos','herramientas de rescate'],
+ 'moderado', true),
+
+('Frigorífico Cumbres de Curumo',
+ 'Avenida principal de Cumbres de Curumo',
+ NULL,
+ 'Distrito Capital', 'Baruta',
+ NULL,
+ 'https://maps.app.goo.gl/zsva6JqsnyQUqGaq7',
+ ARRAY['alimentos no perecederos','agua potable'],
+ 'critico', true),
+
+('Cruz Roja Venezolana — Caracas',
+ 'Caracas, Distrito Capital',
+ '0212-5559111',
+ 'Distrito Capital', 'Caracas',
+ '24 hrs',
+ NULL,
+ ARRAY['medicamentos básicos','agua potable','insumos médicos'],
+ 'critico', true),
+
+('Centro de Acopio Las Mercedes',
+ 'Las Mercedes, Caracas',
+ '0412-1234567',
+ 'Distrito Capital', 'Baruta',
+ '8am - 8pm',
+ NULL,
+ ARRAY['agua potable','alimentos no perecederos','medicamentos básicos'],
+ 'critico', true),
+
+('Polideportivo Municipal Valencia',
+ 'Valencia, Carabobo',
+ '0416-5554433',
+ 'Carabobo', 'Valencia',
+ '6am - 10pm',
+ NULL,
+ ARRAY['colchones','cobijas','agua potable'],
+ 'moderado', true),
+
+('UE La Trinidad',
+ 'Petare, Miranda',
+ '0416-4441122',
+ 'Miranda', 'Sucre',
+ '8am - 6pm',
+ NULL,
+ ARRAY['colchones','agua potable','alimentos no perecederos'],
+ 'moderado', true),
+
+('Fundación Mahuampi — La Guaira',
+ 'La Guaira, Vargas',
+ '0212-3451234',
+ 'Vargas', 'La Guaira',
+ '24 hrs',
+ NULL,
+ ARRAY['agua potable','alimentos no perecederos','medicamentos básicos','ropa'],
+ 'critico', true),
+
+('Iglesia San Francisco de Asís — Barquisimeto',
+ 'Barquisimeto, Lara',
+ '0418-3332211',
+ 'Lara', 'Iribarren',
+ '9am - 9pm',
+ NULL,
+ ARRAY['alimentos no perecederos'],
+ 'full', true),
+
+('Liceo Andrés Bello — Puerto Ordaz',
+ 'Puerto Ordaz, Bolívar',
+ '0424-7778899',
+ 'Bolívar', 'Caroní',
+ '8am - 6pm',
+ NULL,
+ ARRAY['agua potable','alimentos no perecederos','medicamentos básicos','colchones','ropa'],
+ 'critico', true);
+
+-- ═══════════════════════════════════════════════════════════════
+-- Verificar que todo se creó correctamente:
+-- SELECT COUNT(*) FROM centers;   → debe dar 12
+-- SELECT nombre, status FROM centers ORDER BY status;
+-- ═══════════════════════════════════════════════════════════════
