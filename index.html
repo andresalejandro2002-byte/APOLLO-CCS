@@ -1,222 +1,322 @@
-/**
- * APO.YA — Webhook de Telegram
- * 
- * Recibe cada mensaje del grupo, lo clasifica con Claude,
- * y actualiza el estado de inventario en Supabase.
- * 
- * Variables de entorno necesarias en Vercel:
- *   TELEGRAM_BOT_TOKEN
- *   ANTHROPIC_API_KEY
- *   SUPABASE_URL
- *   SUPABASE_SERVICE_KEY  (la service_role key, NO la anon key)
- */
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="description" content="APO.YA — Dashboard de centros de refugio Venezuela">
+  <meta name="theme-color" content="#0a0f1e">
+  <title>APO.YA — Centros de Refugio</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/2.44.0/iconfont/tabler-icons.min.css">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: #060a14; font-family: system-ui, -apple-system, sans-serif; color: #e5e7eb; }
+    body { display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; }
+    #root { width: 100%; max-width: 540px; min-height: 100vh; background: linear-gradient(135deg,#0a0f1e 0%,#0d1829 50%,#0a1520 100%); position: relative; }
 
-const INSUMOS = [
-  "agua potable", "alimentos no perecederos", "comida preparada",
-  "fórmula infantil", "gatorade", "jugos", "abrigo", "sábanas",
-  "cobijas", "colchones", "ropa para adulto", "ropa para bebés",
-  "alcohol antiséptico", "analgésicos", "antiinflamatorios",
-  "gasas", "vendas", "medicina pediátrica", "vitaminas",
-  "equipo de seguridad", "herramientas de rescate", "insumos médicos",
-  "artículos de higiene", "medicamentos básicos"
-];
+    /* ── Header ── */
+    .hdr { background: rgba(255,255,255,0.04); border-bottom: 1px solid rgba(255,255,255,0.08); padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+    .logo { display: flex; align-items: center; gap: 8px; }
+    .chicken { font-size: 22px; animation: glow 1.4s ease-in-out infinite; display: inline-block; }
+    @keyframes glow { 0%,100%{filter:drop-shadow(0 0 6px #ef4444);transform:scale(1)} 50%{filter:drop-shadow(0 0 14px #ef4444);transform:scale(1.06)} }
+    .logo-text { font-size: 18px; font-weight: 800; color: #ef4444; letter-spacing: -1px; }
+    .logo-sub { font-size: 9px; color: rgba(255,255,255,0.35); }
+    .live { font-size: 9px; background: rgba(239,68,68,0.15); color: #ef4444; padding: 3px 8px; border-radius: 99px; font-weight: 700; border: 1px solid rgba(239,68,68,0.3); display: flex; align-items: center; gap: 4px; }
+    .live-dot { width: 6px; height: 6px; border-radius: 50%; background: #ef4444; animation: glow 1s infinite; }
 
-export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).end();
+    /* ── Stats bar ── */
+    .stats { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; padding: 12px 16px; }
+    .stat { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 8px; text-align: center; }
+    .stat-num { font-size: 20px; font-weight: 800; font-family: monospace; }
+    .stat-lbl { font-size: 9px; color: rgba(255,255,255,0.4); margin-top: 1px; }
 
-  const update = req.body;
+    /* ── Tabs ── */
+    .tabs { display: flex; padding: 0 16px; gap: 8px; margin-bottom: 16px; }
+    .tab { flex: 1; padding: 10px 8px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.45); font-size: 12px; font-weight: 700; cursor: pointer; text-align: center; transition: all 0.2s; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+    .tab .tab-count { font-size: 18px; font-weight: 900; font-family: monospace; }
+    .tab.tc { border-color: rgba(239,68,68,0.5); background: rgba(239,68,68,0.1); color: #ef4444; }
+    .tab.tm { border-color: rgba(251,191,36,0.5); background: rgba(251,191,36,0.1); color: #fbbf24; }
+    .tab.tf { border-color: rgba(16,185,129,0.5); background: rgba(16,185,129,0.1); color: #10b981; }
 
-  // Ignorar updates sin mensaje
-  const msg = update?.message || update?.channel_post;
-  if (!msg) return res.status(200).json({ ok: true });
+    /* ── Search ── */
+    .search-wrap { padding: 0 16px 14px; }
+    .search-inp { width: 100%; padding: 9px 14px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; color: #e5e7eb; font-size: 13px; outline: none; }
 
-  const text = msg.text || msg.caption || '';
-  const photo = msg.photo;
-  const from = msg.from?.first_name || msg.from?.username || 'Anónimo';
-  const timestamp = new Date(msg.date * 1000).toISOString();
+    /* ── Center list ── */
+    .list { padding: 0 16px; display: flex; flex-direction: column; gap: 10px; }
+    .empty { text-align: center; padding: 40px 20px; font-size: 13px; color: rgba(255,255,255,0.3); }
 
-  // Si no hay texto ni foto, ignorar
-  if (!text && !photo) return res.status(200).json({ ok: true });
+    /* ── Center card ── */
+    .card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 14px; overflow: hidden; transition: all 0.2s; }
+    .card:hover { border-color: rgba(255,255,255,0.2); }
+    .card.critico { border-left: 3px solid #ef4444; }
+    .card.moderado { border-left: 3px solid #fbbf24; }
+    .card.full { border-left: 3px solid #10b981; }
+    .card-photo { width: 100%; height: 140px; object-fit: cover; background: #0d1829; display: block; }
+    .card-photo-placeholder { width: 100%; height: 100px; background: linear-gradient(135deg,#0d1829,#1a2535); display: flex; align-items: center; justify-content: center; font-size: 32px; }
+    .card-body { padding: 12px 14px; }
+    .card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+    .card-name { font-size: 14px; font-weight: 700; color: #f9fafb; line-height: 1.3; flex: 1; padding-right: 10px; }
+    .badge { font-size: 9px; font-weight: 800; padding: 3px 8px; border-radius: 99px; flex-shrink: 0; }
+    .badge.critico { background: rgba(239,68,68,0.2); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); }
+    .badge.moderado { background: rgba(251,191,36,0.2); color: #fbbf24; border: 1px solid rgba(251,191,36,0.3); }
+    .badge.full { background: rgba(16,185,129,0.2); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
+    .card-meta { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+    .card-meta-row { font-size: 11px; color: rgba(255,255,255,0.45); display: flex; align-items: flex-start; gap: 5px; }
+    .card-meta-row i { font-size: 13px; margin-top: 1px; flex-shrink: 0; }
+    .card-meta-row a { color: rgba(245,158,11,0.85); text-decoration: none; }
+    .card-meta-row a:hover { text-decoration: underline; }
+    .insumos-title { font-size: 10px; color: rgba(255,255,255,0.3); font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; }
+    .insumos-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+    .insumo-tag { padding: 3px 9px; font-size: 10px; border-radius: 99px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.55); }
+    .insumo-tag.urgente { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.25); color: #fca5a5; }
+    .last-msg { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+    .last-msg-lbl { font-size: 9px; color: rgba(255,255,255,0.25); font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 3px; display: flex; align-items: center; gap: 4px; }
+    .last-msg-text { font-size: 11px; color: rgba(255,255,255,0.55); line-height: 1.4; }
+    .last-msg-time { font-size: 10px; color: rgba(255,255,255,0.25); margin-top: 3px; }
+    .stale-warn { font-size: 10px; color: #f59e0b; display: flex; align-items: center; gap: 4px; margin-top: 6px; }
+    .card-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .btn-maps { flex: 1; padding: 9px; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); border-radius: 8px; color: #93c5fd; font-size: 11px; font-weight: 700; cursor: pointer; text-decoration: none; text-align: center; display: flex; align-items: center; justify-content: center; gap: 5px; }
+    .btn-tel { flex: 1; padding: 9px; background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.3); border-radius: 8px; color: #6ee7b7; font-size: 11px; font-weight: 700; cursor: pointer; text-decoration: none; text-align: center; display: flex; align-items: center; justify-content: center; gap: 5px; }
+    .verified-badge { font-size: 10px; color: #6ee7b7; display: inline-flex; align-items: center; gap: 3px; margin-left: 4px; }
 
+    /* ── Loading / error states ── */
+    .loading { text-align: center; padding: 40px 20px; }
+    .spinner { width: 28px; height: 28px; border: 3px solid rgba(255,255,255,0.1); border-top-color: #ef4444; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 12px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error-box { margin: 16px; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); border-radius: 12px; padding: 14px; font-size: 12px; color: #fca5a5; line-height: 1.6; }
+
+    /* ── Refresh indicator ── */
+    .refresh-bar { height: 2px; background: rgba(255,255,255,0.06); position: relative; overflow: hidden; }
+    .refresh-progress { height: 100%; background: linear-gradient(90deg,#ef4444,#f59e0b); position: absolute; left: 0; transition: width 1s linear; }
+
+    /* ── Footer ── */
+    .footer { text-align: center; padding: 20px 16px 24px; font-size: 11px; color: rgba(255,255,255,0.2); font-style: italic; }
+
+    /* ── Telegram badge ── */
+    .tg-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; background: rgba(41,182,246,0.1); border: 1px solid rgba(41,182,246,0.25); color: #7dd3fc; border-radius: 99px; padding: 3px 8px; }
+  </style>
+</head>
+<body>
+<div id="root">
+
+  <div class="hdr">
+    <div class="logo">
+      <span class="chicken">🍗</span>
+      <div>
+        <div class="logo-text">APO.YA</div>
+        <div class="logo-sub">Centros de refugio · Venezuela</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="tg-badge"><i class="ti ti-brand-telegram" style="font-size:13px"></i>Telegram activo</span>
+      <div class="live"><span class="live-dot"></span>EN VIVO</div>
+    </div>
+  </div>
+
+  <div class="refresh-bar"><div class="refresh-progress" id="refreshProgress" style="width:100%"></div></div>
+
+  <div class="stats" id="statsBar">
+    <div class="stat"><div class="stat-num" style="color:#ef4444" id="stat-critico">—</div><div class="stat-lbl">Críticos</div></div>
+    <div class="stat"><div class="stat-num" style="color:#fbbf24" id="stat-moderado">—</div><div class="stat-lbl">Moderados</div></div>
+    <div class="stat"><div class="stat-num" style="color:#10b981" id="stat-full">—</div><div class="stat-lbl">Full</div></div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab tc" id="tab-critico" onclick="setTab('critico')">
+      <div class="tab-count" id="tc-count">0</div>
+      <div>🔴 Crítico</div>
+    </div>
+    <div class="tab" id="tab-moderado" onclick="setTab('moderado')">
+      <div class="tab-count" id="tm-count">0</div>
+      <div>🟡 Moderado</div>
+    </div>
+    <div class="tab" id="tab-full" onclick="setTab('full')">
+      <div class="tab-count" id="tf-count">0</div>
+      <div>🟢 Full</div>
+    </div>
+  </div>
+
+  <div class="search-wrap">
+    <input class="search-inp" id="searchInp" placeholder="🔍 Buscar por nombre, ciudad o estado…" oninput="renderList()">
+  </div>
+
+  <div class="list" id="centerList">
+    <div class="loading">
+      <div class="spinner"></div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.35)">Cargando centros…</div>
+    </div>
+  </div>
+
+  <div class="footer">por Venezolanos para Venezuela — AS 2026</div>
+</div>
+
+<script>
+// ── Config ──────────────────────────────────────────────────────────────────
+const SUPABASE_URL  = 'https://ifpgomrszerktvcmthyo.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmcGdvbXJzemVya3R2Y210aHlvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI1NDUzNTAsImV4cCI6MjA5ODEyMTM1MH0.nOjX3VXFWtsjCzyb-4DMly_LrMMhFYoSeBswn1RjQIM';
+const REFRESH_MS    = 30000; // actualiza cada 30 segundos
+
+// ── State ───────────────────────────────────────────────────────────────────
+let allCenters = [];
+let activeTab  = 'critico';
+let refreshTimer, progressTimer, progressPct = 100;
+
+// ── Fetch centers directly from Supabase ────────────────────────────────────
+async function fetchCenters() {
   try {
-    // ── 1. Clasificar el mensaje con Claude ────────────────────────────
-    const classification = await classifyWithClaude(text, photo, msg, from);
-
-    // ── 2. Guardar el mensaje raw en Supabase ──────────────────────────
-    await supabaseInsert('mensajes_telegram', {
-      telegram_message_id: msg.message_id,
-      from_name: from,
-      text: text || null,
-      has_photo: !!photo,
-      tipo: classification.tipo,
-      centro_mencionado: classification.centro,
-      insumos: classification.insumos,
-      cantidades: classification.cantidades,
-      confianza: classification.confianza,
-      timestamp,
-      raw: JSON.stringify(msg)
-    });
-
-    // ── 3. Actualizar inventario del centro si hay match ───────────────
-    if (classification.centro && classification.tipo && classification.confianza !== 'baja') {
-      await actualizarInventario(classification);
-    }
-
-    return res.status(200).json({ ok: true });
-
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/centers?select=*&order=status.asc,nombre.asc`,
+      {
+        headers: {
+          'apikey': SUPABASE_ANON,
+          'Authorization': `Bearer ${SUPABASE_ANON}`
+        }
+      }
+    );
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    allCenters = await r.json();
+    renderAll();
+    startRefreshBar();
   } catch (err) {
-    console.error('Error procesando mensaje:', err);
-    // Siempre devolver 200 a Telegram para que no reintente
-    return res.status(200).json({ ok: true });
+    document.getElementById('centerList').innerHTML = `
+      <div class="error-box">
+        <strong>⚠️ No se pudieron cargar los centros</strong><br>
+        ${err.message}<br><br>
+        Verifica que el proyecto de Supabase esté activo y que el schema.sql haya sido ejecutado.
+        <br><br>
+        <button onclick="fetchCenters()" style="background:rgba(239,68,68,0.2);border:1px solid rgba(239,68,68,0.4);border-radius:8px;color:#fca5a5;padding:6px 14px;cursor:pointer;font-size:12px">Reintentar</button>
+      </div>`;
   }
 }
 
-// ── Clasificación con Claude ────────────────────────────────────────────────
-async function classifyWithClaude(text, photo, msg, from) {
-  const prompt = `Eres un sistema de clasificación humanitaria para Venezuela. Analiza este mensaje de Telegram.
+function renderAll() {
+  const counts = { critico: 0, moderado: 0, full: 0 };
+  allCenters.forEach(c => counts[c.status] = (counts[c.status]||0) + 1);
 
-MENSAJE: "${text || '(solo imagen)'}"
-ENVIADO POR: ${from}
+  // Stats
+  document.getElementById('stat-critico').textContent  = counts.critico  || 0;
+  document.getElementById('stat-moderado').textContent = counts.moderado || 0;
+  document.getElementById('stat-full').textContent     = counts.full     || 0;
+  document.getElementById('tc-count').textContent = counts.critico  || 0;
+  document.getElementById('tm-count').textContent = counts.moderado || 0;
+  document.getElementById('tf-count').textContent = counts.full     || 0;
 
-TAREA: Determina si este mensaje reporta:
-1. NECESIDAD — un centro/refugio necesita insumos
-2. DONACION — alguien está llevando o enviando insumos a un centro
-3. IRRELEVANTE — no es sobre insumos ni centros de refugio
-
-INSUMOS CONOCIDOS: ${INSUMOS.join(', ')}
-
-Responde SOLO con este JSON (sin markdown):
-{
-  "tipo": "NECESIDAD" | "DONACION" | "IRRELEVANTE",
-  "centro": "nombre del centro mencionado o null",
-  "insumos": ["lista de insumos mencionados"],
-  "cantidades": {"insumo": cantidad_numerica},
-  "accion": "resumen en 1 línea de lo que dice el mensaje",
-  "confianza": "alta" | "media" | "baja"
+  renderList();
 }
 
-Si el mensaje es ambiguo o no menciona claramente un centro, usa confianza "baja".`;
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 500,
-      messages: [{ role: 'user', content: prompt }]
-    })
+function renderList() {
+  const q = (document.getElementById('searchInp').value || '').toLowerCase();
+  const filtered = allCenters.filter(c => {
+    if (c.status !== activeTab) return false;
+    if (!q) return true;
+    return (c.nombre + c.direccion + c.estado + c.municipio)
+      .toLowerCase().includes(q);
   });
 
-  const data = await response.json();
-  const raw = data.content?.[0]?.text || '{}';
-
-  try {
-    return JSON.parse(raw.replace(/```json|```/g, '').trim());
-  } catch {
-    return { tipo: 'IRRELEVANTE', centro: null, insumos: [], cantidades: {}, confianza: 'baja' };
-  }
-}
-
-// ── Actualizar inventario en Supabase ───────────────────────────────────────
-async function actualizarInventario(classification) {
-  // Buscar el centro por nombre aproximado
-  const centros = await supabaseFetch(
-    `centers?nombre=ilike.*${encodeURIComponent(classification.centro)}*&limit=1`
-  );
-
-  if (!centros?.length) return;
-
-  const centro = centros[0];
-  const inventarioActual = centro.inventario || {};
-
-  if (classification.tipo === 'DONACION') {
-    // Sumar lo que llegan
-    for (const [insumo, cantidad] of Object.entries(classification.cantidades || {})) {
-      const key = normalizarInsumo(insumo);
-      inventarioActual[key] = Math.min(100, (inventarioActual[key] || 0) + calcularPct(cantidad));
-    }
-    // Si no hay cantidades específicas, subir 10% a los insumos mencionados
-    if (!Object.keys(classification.cantidades || {}).length) {
-      for (const insumo of classification.insumos || []) {
-        const key = normalizarInsumo(insumo);
-        inventarioActual[key] = Math.min(100, (inventarioActual[key] || 0) + 10);
-      }
-    }
-  } else if (classification.tipo === 'NECESIDAD') {
-    // Marcar insumos como críticos si se reportan como necesarios
-    for (const insumo of classification.insumos || []) {
-      const key = normalizarInsumo(insumo);
-      if (!inventarioActual[key] || inventarioActual[key] > 30) {
-        inventarioActual[key] = 15; // marca como bajo si no había dato
-      }
-    }
+  if (!filtered.length) {
+    document.getElementById('centerList').innerHTML =
+      `<div class="empty">No hay centros en esta categoría${q ? ' para "'+q+'"' : ''}</div>`;
+    return;
   }
 
-  // Calcular status general
-  const valores = Object.values(inventarioActual);
-  const promedio = valores.length
-    ? Math.round(valores.reduce((a, b) => a + b, 0) / valores.length)
-    : 50;
-
-  const status = promedio <= 25 ? 'critico' : promedio <= 60 ? 'moderado' : 'full';
-
-  await supabasePatch(`centers?id=eq.${centro.id}`, {
-    inventario: inventarioActual,
-    status,
-    ultimo_reporte: new Date().toISOString(),
-    ultimo_mensaje: classification.accion
-  });
+  document.getElementById('centerList').innerHTML =
+    filtered.map(c => cardHTML(c)).join('');
 }
 
-// ── Helpers Supabase ────────────────────────────────────────────────────────
-async function supabaseFetch(path) {
-  const r = await fetch(`${process.env.SUPABASE_URL}/rest/v1/${path}`, {
-    headers: {
-      'apikey': process.env.SUPABASE_SERVICE_KEY,
-      'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`
+function cardHTML(c) {
+  const stale = c.ultimo_reporte &&
+    (Date.now() - new Date(c.ultimo_reporte)) > 6 * 3600000;
+
+  const foto = c.foto_url
+    ? `<img class="card-photo" src="${c.foto_url}" alt="${c.nombre}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+    : '';
+  const placeholder = `<div class="card-photo-placeholder" ${c.foto_url?'style="display:none"':''}>🏠</div>`;
+
+  const insumos = (c.insumos_requeridos || []).slice(0, 6).map(i =>
+    `<span class="insumo-tag urgente">${i}</span>`
+  ).join('');
+
+  const lastMsg = c.ultimo_mensaje
+    ? `<div class="last-msg">
+        <div class="last-msg-lbl"><i class="ti ti-brand-telegram" style="font-size:11px"></i>Último reporte</div>
+        <div class="last-msg-text">${c.ultimo_mensaje}</div>
+        ${c.ultimo_reporte ? `<div class="last-msg-time">${timeAgo(c.ultimo_reporte)}</div>` : ''}
+       </div>`
+    : `<div class="last-msg">
+        <div class="last-msg-lbl"><i class="ti ti-brand-telegram" style="font-size:11px"></i>Sin reportes aún</div>
+        <div class="last-msg-text" style="color:rgba(255,255,255,0.25)">Esperando mensajes del grupo de Telegram…</div>
+       </div>`;
+
+  const actions = `
+    <div class="card-actions">
+      ${c.maps_url
+        ? `<a href="${c.maps_url}" target="_blank" rel="noopener" class="btn-maps"><i class="ti ti-map-pin"></i>Cómo llegar</a>`
+        : ''}
+      ${c.telefono
+        ? `<a href="tel:${c.telefono.replace(/[^0-9+]/g,'')}" class="btn-tel"><i class="ti ti-phone"></i>${c.telefono}</a>`
+        : ''}
+    </div>`;
+
+  return `
+    <div class="card ${c.status}">
+      ${foto}${placeholder}
+      <div class="card-body">
+        <div class="card-top">
+          <div class="card-name">
+            ${c.nombre}
+            ${c.verificado ? '<span class="verified-badge"><i class="ti ti-circle-check" style="font-size:12px"></i>Verificado</span>' : ''}
+          </div>
+          <span class="badge ${c.status}">${c.status.toUpperCase()}</span>
+        </div>
+        <div class="card-meta">
+          ${c.direccion ? `<div class="card-meta-row"><i class="ti ti-map-pin"></i>${c.direccion}</div>` : ''}
+          ${c.estado ? `<div class="card-meta-row"><i class="ti ti-map"></i>${c.municipio ? c.municipio+', ' : ''}${c.estado}</div>` : ''}
+          ${c.horario ? `<div class="card-meta-row"><i class="ti ti-clock"></i>${c.horario}</div>` : ''}
+        </div>
+        ${insumos ? `<div class="insumos-title">Insumos requeridos</div><div class="insumos-tags">${insumos}</div>` : ''}
+        ${lastMsg}
+        ${stale ? `<div class="stale-warn"><i class="ti ti-alert-triangle" style="font-size:12px"></i>Sin actualización en más de 6h — verificar estado</div>` : ''}
+        ${actions}
+      </div>
+    </div>`;
+}
+
+function setTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab').forEach(t => {
+    t.className = 'tab';
+  });
+  const cls = { critico: 'tc', moderado: 'tm', full: 'tf' };
+  document.getElementById('tab-'+tab).classList.add(cls[tab]);
+  renderList();
+}
+
+function timeAgo(iso) {
+  const diff = (Date.now() - new Date(iso)) / 60000;
+  if (diff < 1)  return 'hace un momento';
+  if (diff < 60) return `hace ${Math.round(diff)}min`;
+  if (diff < 1440) return `hace ${Math.round(diff/60)}h`;
+  return `hace ${Math.round(diff/1440)}d`;
+}
+
+// ── Auto-refresh every 30s ───────────────────────────────────────────────────
+function startRefreshBar() {
+  clearInterval(progressTimer);
+  progressPct = 100;
+  const bar = document.getElementById('refreshProgress');
+  bar.style.width = '100%';
+
+  progressTimer = setInterval(() => {
+    progressPct -= (100 / (REFRESH_MS / 1000));
+    bar.style.width = Math.max(0, progressPct) + '%';
+    if (progressPct <= 0) {
+      fetchCenters();
     }
-  });
-  return r.json();
+  }, 1000);
 }
 
-async function supabaseInsert(table, data) {
-  await fetch(`${process.env.SUPABASE_URL}/rest/v1/${table}`, {
-    method: 'POST',
-    headers: {
-      'apikey': process.env.SUPABASE_SERVICE_KEY,
-      'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
-      'Content-Type': 'application/json',
-      'Prefer': 'return=minimal'
-    },
-    body: JSON.stringify(data)
-  });
-}
-
-async function supabasePatch(path, data) {
-  await fetch(`${process.env.SUPABASE_URL}/rest/v1/${path}`, {
-    method: 'PATCH',
-    headers: {
-      'apikey': process.env.SUPABASE_SERVICE_KEY,
-      'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`,
-      'Content-Type': 'application/json',
-      'Prefer': 'return=minimal'
-    },
-    body: JSON.stringify(data)
-  });
-}
-
-function normalizarInsumo(insumo) {
-  return insumo.toLowerCase().trim().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
-}
-
-function calcularPct(cantidad) {
-  // Heurística: 1-5 unidades = 5%, 6-20 = 10%, 21-50 = 20%, 50+ = 30%
-  if (cantidad <= 5) return 5;
-  if (cantidad <= 20) return 10;
-  if (cantidad <= 50) return 20;
-  return 30;
-}
+// ── Init ────────────────────────────────────────────────────────────────────
+fetchCenters();
+</script>
+</body>
+</html>
