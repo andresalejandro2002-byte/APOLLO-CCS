@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "builds": [
+    { "src": "index.html", "use": "@vercel/static" },
+    { "src": "api/telegram.js", "use": "@vercel/node" },
+    { "src": "api/centers.js", "use": "@vercel/node" },
+    { "src": "api/setup-webhook.js", "use": "@vercel/node" }
+  ],
+  "routes": [
+    { "src": "/api/telegram", "dest": "/api/telegram.js" },
+    { "src": "/api/centers", "dest": "/api/centers.js" },
+    { "src": "/api/setup-webhook", "dest": "/api/setup-webhook.js" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ]
+}
